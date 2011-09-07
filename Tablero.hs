@@ -72,7 +72,7 @@ enRango (columna, fila) = c <= h && a <= c && fila <= 8 && 0 <= fila
         a = ord 'a'
         
 generar :: Posicion -> (Posicion -> Posicion) -> [Posicion]
-generar = (takeWhile enRango .) . flip iterate
+generar = (takeWhile enRango .) . flip iterate -- generar pos f = takeWhile enRango (iterate f pos)
 
 posicionesAInvertir :: Posicion -> Tablero -> [Posicion]
 posicionesAInvertir p (T f) = direcciones >>= inversiones p
