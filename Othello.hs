@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Othello where
 
 import Data.Maybe
@@ -25,12 +27,15 @@ arbolDeJugadas j = Nodo ([], j) $ zipWith agmov movs hijos
         hijos = map (arbolDeJugadas . snd) movsJuegos
 
 esInvalida :: Jugada -> Juego -> Bool
-esInvalida Paso _ = False
+esInvalida Paso j = any (flip esValida j) (map fst $ jugadasSinPaso j)
 esInvalida (M p) (J c t@(T f)) = (f p /= Nothing) ||
                                   (not $ enRango p) ||
                                   (null $ posicionesAInvertir p t')
     where
         t' = poner p c t
+
+esValida :: Jugada -> Juego -> Bool
+esValida = (not .) . esInvalida 
 
 aplicarJugada :: Jugada -> Juego -> Juego -- asume valida
 aplicarJugada Paso (J c t) = J (cambiarColor c) t
@@ -46,70 +51,72 @@ jugar :: Jugada -> Juego -> Maybe Juego
 jugar jugada juego = if esInvalida jugada juego then Nothing
                      else Just (aplicarJugada jugada juego)
 
+jugadasSinPaso :: Juego -> [(Jugada, Juego)]
+jugadasSinPaso juego = [(m, aplicarJugada m juego) |  fila <- [1..8], 
+                                                columna <- ['a'..'h'], 
+                                                let m = M (columna, fila), 
+                                                esValida m juego]
+
 jugadasPosibles :: Juego -> [(Jugada, Juego)]
-jugadasPosibles juego = (Paso, juego):jugadasReales
-    where
-        jugadasReales :: [(Jugada, Juego)]
-        jugadasReales = unjust jugadas
-        jugadas :: [(Jugada, Maybe Juego)]
-        jugadas = [(m, jugar m juego) | fila <- [1..8], columna <- ['a'..'h'], let m = M (columna, fila)]
-        unjust :: [(a, Maybe b)] -> [(a, b)]
-    	unjust [] = []
-        unjust ((x, Nothing):xs) = unjust xs
-    	unjust ((x, Just y):xs) = (x, y):unjust xs
-    	-- unjust == mapMaybe . uncurry $ fmap . (,)
+jugadasPosibles juego = if esInvalida Paso juego 
+                        then jugadasSinPaso juego
+                        else [(Paso, juego)]
 
 foldArbol :: (a -> [b] -> b) -> Arbol a -> b
 foldArbol f = g where
     g (Nodo x xs) = f x (map (foldArbol f) xs)
-    
-podarFoldable :: Int -> a -> [Arbol a] -> Arbol a
-podarFoldable k x arboles | k == 0 = Nodo x []
-                          | otherwise = Nodo x mapeados
+
+
+podar :: Int -> Arbol a -> Arbol a
+podar = flip $ foldArbol podar'
     where
-        mapeados = map (foldArbol . podarFoldable $ k-1) arboles
-                
-podar :: Arbol a -> Int -> Arbol a
-podar n k = foldArbol (podarFoldable k) n -- flip $ foldArbol . podarFoldable
+        podar' :: a -> [Int -> Arbol a] -> Int -> Arbol a
+        podar' x fs k = Nodo x xs
+            where
+                xs  | k == 0 = []
+                    | otherwise = map ($ (k-1)) fs
 
 minimax :: Valuacion -> ArbolJugadas -> (Double, [Jugada])
-{- si llego al final, es que o no puedo hacer nada, o no quiero hacer nada (i.e. paso) -}
-{- tambien puede ser que este tablero sea definitivamente ganador o perdedor, en cuyo
-caso lo devuelvo sin evaluar a sus hijos. -}
-minimax f (Nodo (chain, game) xs)   | null xs || abs valor == 1 = (valor, chain)
-                                    | valor_esta >= valor_resto = jugando_esta
-                                    | otherwise = jugando_el_resto
-    where
-        valor :: Double
-        valor = f game
-        jugando_esta :: (Double, [Jugada])
-        jugando_esta@(valor_esta, _) = minimax (negate . f) (head xs)
-        el_resto :: ArbolJugadas
-        el_resto = Nodo (chain, game) (tail xs)
-        jugando_el_resto :: (Double, [Jugada])
-        jugando_el_resto@(valor_resto, _) = minimax f el_resto
-   
-   
-{- version con foldArbol, revisar. Tengo que multiplicar los doubles por -1 en algún lado.  -}   
-minimax' :: Valuacion -> ArbolJugadas -> (Double, [Jugada])
-minimax' f = foldArbol g
+minimax f = foldArbol g
     where
         g :: ([Jugada], Juego) -> [(Double, [Jugada])] -> (Double, [Jugada])
         g (plays, game) xs | null xs || abs valor == 1 = (valor, plays)
-                           | this_value >= other_value = option
-                           | otherwise = other_option
+                           | otherwise = selectMaxMinus
             where                
                 valor :: Double
                 valor = f game
-                option :: (Double, [Jugada])
-                option = head xs
-                this_value :: Double
-                this_value = fst option
-                this_chain :: [Jugada]
-                this_chain = snd option
-                other_option = g (plays, game) (tail xs)
-                other_value = fst other_option
-                other_chain = snd other_option
+                maxMinusDouble :: Double
+                maxMinusDouble = maximum $ map (negate . fst) xs
+                selectMaxMinus :: (Double, [Jugada])
+                selectMaxMinus = head $ filter (( == maxMinusDouble) . fst) xs
+
                 
 mejorJugada :: Valuacion -> ArbolJugadas -> Jugada
-mejorJugada = ((head . snd) .) . minimax -- o minimax'        
+mejorJugada = ((head . snd) .) . minimax
+
+contar :: Color -> Juego -> Int
+contar col (J _ t) = length [Just col == contenido (c, i) t | 
+                                    c <- ['a'..'h'], 
+                                    i <- [1..8]]
+
+
+ganador :: Juego -> Maybe Color
+ganador j | elTieneQuePasar && yoDespuesPaso = Just colorDominante
+          | otherwise = Nothing
+    where
+        tieneQuePasar (Just g) = any ((== Paso) . fst) (jugadasPosibles g)
+        elTieneQuePasar = tieneQuePasar (Just j)
+        Just j' = jugar Paso j
+        yoDespuesPaso = tieneQuePasar (jugar Paso j')
+        colorDominante = if (contar Negro j) > (contar Blanco j) 
+                         then Negro 
+                         else Blanco
+                         
+                         
+valuacionOthello :: Valuacion
+valuacionOthello j@(J c t)  | ganador j == Just c = 1
+							| ganador j == Nothing = (fromIntegral 2) * (m / tot) - fromIntegral 1
+							| otherwise = -1
+	where 
+		m = fromIntegral $ contar c j
+		tot = m + (fromIntegral $ contar (cambiarColor c) j)
